@@ -4,6 +4,7 @@ use std::{
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
+    time::UNIX_EPOCH,
 };
 
 use serde::Serialize;
@@ -14,6 +15,7 @@ pub struct OpenedDocument {
     pub path: String,
     pub html: String,
     pub source: String,
+    pub version: String,
 }
 
 pub fn open_markdown_document(path: String) -> Result<OpenedDocument, String> {
@@ -23,9 +25,17 @@ pub fn open_markdown_document(path: String) -> Result<OpenedDocument, String> {
 
     let source = fs::read_to_string(&path)
         .map_err(|error| format!("Could not open Markdown Document: {error}"))?;
-    let html = markdown::render_markdown_document(&source, Path::new(&path).parent());
+    let document_path = Path::new(&path);
+    let html = markdown::render_markdown_document(&source, document_path.parent());
+    let version = document_version(document_path)
+        .map_err(|error| format!("Could not inspect Markdown Document: {error}"))?;
 
-    Ok(OpenedDocument { path, html, source })
+    Ok(OpenedDocument {
+        path,
+        html,
+        source,
+        version,
+    })
 }
 
 pub fn save_markdown_document(path: String, source: String) -> Result<OpenedDocument, String> {
@@ -37,8 +47,24 @@ pub fn save_markdown_document(path: String, source: String) -> Result<OpenedDocu
     atomic_write(document_path, source.as_bytes())
         .map_err(|error| format!("Could not save Markdown Document: {error}"))?;
     let html = markdown::render_markdown_document(&source, document_path.parent());
+    let version = document_version(document_path)
+        .map_err(|error| format!("Could not inspect Markdown Document: {error}"))?;
 
-    Ok(OpenedDocument { path, html, source })
+    Ok(OpenedDocument {
+        path,
+        html,
+        source,
+        version,
+    })
+}
+
+pub fn markdown_document_version(path: String) -> Result<String, String> {
+    if !is_markdown_document(&path) {
+        return Err("Only .md Markdown Documents can be watched".to_string());
+    }
+
+    document_version(Path::new(&path))
+        .map_err(|error| format!("Could not inspect Markdown Document: {error}"))
 }
 
 pub fn render_markdown_preview(path: String, source: String) -> Result<String, String> {
@@ -59,6 +85,17 @@ fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
         return Err(error);
     }
     Ok(())
+}
+
+fn document_version(path: &Path) -> io::Result<String> {
+    let metadata = fs::metadata(path)?;
+    let modified = metadata
+        .modified()?
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+
+    Ok(format!("{}:{modified}", metadata.len()))
 }
 
 fn write_temp_file(path: &Path, contents: &[u8]) -> io::Result<PathBuf> {
@@ -188,6 +225,11 @@ mod commands {
     }
 
     #[tauri::command]
+    pub fn markdown_document_version(path: String) -> Result<String, String> {
+        super::markdown_document_version(path)
+    }
+
+    #[tauri::command]
     pub fn render_markdown_preview(path: String, source: String) -> Result<String, String> {
         super::render_markdown_preview(path, source)
     }
@@ -212,6 +254,7 @@ pub fn run() {
             commands::initial_markdown_paths,
             commands::open_markdown_document,
             commands::save_markdown_document,
+            commands::markdown_document_version,
             commands::render_markdown_preview
         ])
         .run(tauri::generate_context!())

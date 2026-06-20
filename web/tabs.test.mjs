@@ -60,3 +60,53 @@ test("preserves dirty source while switching viewer editor and dual pane modes",
   assert.equal(tabs.snapshot().activeTab.source, "# One\n\nChanged.");
   assert.equal(tabs.snapshot().activeTab.dirty, true);
 });
+
+test("reloads clean external changes", () => {
+  const tabs = createTabStore();
+  const id = tabs.open({
+    path: "C:\\docs\\one.md",
+    html: "<h1>One</h1>",
+    source: "# One",
+    version: "1"
+  }).activeId;
+
+  tabs.markReloaded(id, {
+    path: "C:\\docs\\one.md",
+    html: "<h1>Two</h1>",
+    source: "# Two",
+    version: "2"
+  });
+
+  assert.equal(tabs.snapshot().activeTab.source, "# Two");
+  assert.equal(tabs.snapshot().activeTab.version, "2");
+  assert.equal(tabs.snapshot().activeTab.conflicted, false);
+});
+
+test("tracks dirty external conflicts until explicit resolution", () => {
+  const tabs = createTabStore();
+  const id = tabs.open({
+    path: "C:\\docs\\one.md",
+    html: "<h1>One</h1>",
+    source: "# One",
+    version: "1"
+  }).activeId;
+
+  tabs.updateSource(id, "# Local");
+  tabs.markConflicted(id, "2");
+  assert.equal(tabs.snapshot().activeTab.dirty, true);
+  assert.equal(tabs.snapshot().activeTab.conflicted, true);
+
+  tabs.clearConflict(id);
+  assert.equal(tabs.snapshot().activeTab.dirty, true);
+  assert.equal(tabs.snapshot().activeTab.conflicted, false);
+
+  tabs.markConflicted(id, "3");
+  tabs.markReloaded(id, {
+    path: "C:\\docs\\one.md",
+    html: "<h1>Disk</h1>",
+    source: "# Disk",
+    version: "3"
+  });
+  assert.equal(tabs.snapshot().activeTab.dirty, false);
+  assert.equal(tabs.snapshot().activeTab.source, "# Disk");
+});

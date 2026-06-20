@@ -53,23 +53,57 @@ export function createTabStore() {
     markSaved(id, document) {
       const tab = tabs.find((tab) => tab.id === id);
       if (tab) {
+        tab.conflicted = false;
         tab.html = document.html;
         tab.source = document.source;
         tab.savedSource = document.source;
+        tab.version = document.version ?? tab.version;
         tab.dirty = false;
+      }
+      return snapshot();
+    },
+    markConflicted(id, version) {
+      const tab = tabs.find((tab) => tab.id === id);
+      if (tab && version !== tab.version) {
+        tab.conflicted = true;
+        tab.externalVersion = version;
+      }
+      return snapshot();
+    },
+    markReloaded(id, document) {
+      const tab = tabs.find((tab) => tab.id === id);
+      if (tab) {
+        tab.conflicted = false;
+        tab.dirty = false;
+        tab.externalVersion = null;
+        tab.html = document.html;
+        tab.savedSource = document.source;
+        tab.source = document.source;
+        tab.version = document.version ?? tab.version;
+      }
+      return snapshot();
+    },
+    clearConflict(id) {
+      const tab = tabs.find((tab) => tab.id === id);
+      if (tab) {
+        tab.conflicted = false;
+        tab.externalVersion = null;
       }
       return snapshot();
     },
     open(document) {
       const tab = {
+        conflicted: false,
         dirty: false,
+        externalVersion: null,
         id: nextId++,
         path: document.path,
         mode: "view",
         savedSource: document.source,
         source: document.source,
         title: document.path.split(/[\\/]/).pop() || document.path,
-        html: document.html
+        html: document.html,
+        version: document.version ?? ""
       };
       tabs.push(tab);
       activeId = tab.id;

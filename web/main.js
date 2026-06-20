@@ -15,6 +15,7 @@ const dirtyDiscard = document.getElementById("dirty-discard");
 const dirtyMessage = document.getElementById("dirty-message");
 const dirtyModal = document.getElementById("dirty-modal");
 const dirtySave = document.getElementById("dirty-save");
+const dirtyTitle = document.getElementById("dirty-title");
 const findCount = document.getElementById("find-count");
 const findInput = document.getElementById("find");
 const findNext = document.getElementById("find-next");
@@ -39,6 +40,7 @@ let mermaidId = 0;
 let previewRefresh = null;
 let previewRenderId = 0;
 let renderedPreview = null;
+let watchTimer = null;
 
 mermaid.initialize({
   startOnLoad: false,
@@ -86,7 +88,7 @@ function renderTabs(state) {
     button.className = tab.id === state.activeId ? "tab active" : "tab";
     button.type = "button";
     button.title = tab.path;
-    button.textContent = `${tab.dirty ? "* " : ""}${tab.title}`;
+    button.textContent = `${tab.conflicted ? "! " : ""}${tab.dirty ? "* " : ""}${tab.title}`;
     button.addEventListener("click", () => showTab(tab.id));
 
     const close = document.createElement("button");
@@ -100,7 +102,7 @@ function renderTabs(state) {
     });
 
     const item = document.createElement("span");
-    item.className = tab.dirty ? "tab-item dirty" : "tab-item";
+    item.className = `tab-item${tab.dirty ? " dirty" : ""}${tab.conflicted ? " conflicted" : ""}`;
     item.append(button, close);
     tabList.append(item);
   });
@@ -402,7 +404,9 @@ async function showState(state) {
     return;
   }
 
-  pathLabel.textContent = state.activeTab.path;
+  pathLabel.textContent = state.activeTab.conflicted
+    ? `${state.activeTab.path} - changed on disk`
+    : state.activeTab.path;
   if (state.activeTab.mode === "edit") {
     viewer.className = "viewer editor-host";
     renderEditor(state.activeTab);
@@ -445,12 +449,26 @@ async function showState(state) {
   refreshFindDisplay(state);
 }
 
+async function showStateForChangedTab(state, id) {
+  if (state.activeId === id) {
+    await showState(state);
+  } else {
+    renderTabs(state);
+    renderRecent(state);
+    updateControls(state);
+  }
+}
+
 async function showTab(id) {
   await showState(tabs.switchTo(id));
 }
 
-function promptDirtyTab(tab) {
-  dirtyMessage.textContent = `${tab.title} has unsaved changes.`;
+function promptChoice({ title, message, primary, secondary, cancel }) {
+  dirtyTitle.textContent = title;
+  dirtyMessage.textContent = message;
+  dirtySave.textContent = primary;
+  dirtyDiscard.textContent = secondary;
+  dirtyCancel.textContent = cancel;
   dirtyModal.hidden = false;
 
   return new Promise((resolve) => {
@@ -458,21 +476,64 @@ function promptDirtyTab(tab) {
       dirtyModal.hidden = true;
       dirtySave.removeEventListener("click", save);
       dirtyDiscard.removeEventListener("click", discard);
-      dirtyCancel.removeEventListener("click", cancel);
+      dirtyCancel.removeEventListener("click", cancelChoice);
       resolve(choice);
     };
-    const save = () => finish("save");
-    const discard = () => finish("discard");
-    const cancel = () => finish("cancel");
+    const save = () => finish("primary");
+    const discard = () => finish("secondary");
+    const cancelChoice = () => finish("cancel");
 
     dirtySave.addEventListener("click", save);
     dirtyDiscard.addEventListener("click", discard);
-    dirtyCancel.addEventListener("click", cancel);
+    dirtyCancel.addEventListener("click", cancelChoice);
+  });
+}
+
+function promptDirtyTab(tab) {
+  return promptChoice({
+    title: "Unsaved changes",
+    message: `${tab.title} has unsaved changes.`,
+    primary: "Save",
+    secondary: "Don't Save",
+    cancel: "Cancel"
+  });
+}
+
+function promptConflict(tab) {
+  return promptChoice({
+    title: "File changed on disk",
+    message: `${tab.title} changed outside mder while you had unsaved edits.`,
+    primary: "Reload from Disk",
+    secondary: "Keep My Edits",
+    cancel: "Cancel"
   });
 }
 
 async function saveTab(tab) {
   try {
+    if (!tab.conflicted) {
+      const version = await tauri.core.invoke("markdown_document_version", { path: tab.path });
+      if (version !== tab.version) {
+        const state = tabs.markConflicted(tab.id, version);
+        await showState(state);
+        tab = state.tabs.find((candidate) => candidate.id === tab.id);
+      }
+    }
+
+    if (tab.conflicted) {
+      const choice = await promptConflict(tab);
+      if (choice === "cancel") {
+        await showState(tabs.snapshot());
+        return null;
+      }
+      if (choice === "primary") {
+        const document = await tauri.core.invoke("open_markdown_document", { path: tab.path });
+        await showState(tabs.markReloaded(tab.id, document));
+        return null;
+      }
+      tab = tabs.clearConflict(tab.id).tabs.find((candidate) => candidate.id === tab.id);
+    }
+
     const document = await tauri.core.invoke("save_markdown_document", {
       path: tab.path,
       source: tab.source
@@ -505,7 +566,7 @@ async function closeTab(id) {
     await showState(tabs.snapshot());
     return false;
   }
-  if (choice === "save") {
+  if (choice === "primary") {
     if (!(await saveTab(tab))) {
       return false;
     }
@@ -535,6 +596,30 @@ async function openMarkdownPaths(paths) {
   )) {
     await openMarkdownDocument(path);
   }
+}
+
+async function checkExternalChanges() {
+  for (const tab of tabs.snapshot().tabs) {
+    try {
+      const version = await tauri.core.invoke("markdown_document_version", { path: tab.path });
+      if (version === tab.version || version === tab.externalVersion) {
+        continue;
+      }
+
+      if (tab.dirty) {
+        await showStateForChangedTab(tabs.markConflicted(tab.id, version), tab.id);
+      } else {
+        const document = await tauri.core.invoke("open_markdown_document", { path: tab.path });
+        await showStateForChangedTab(tabs.markReloaded(tab.id, document), tab.id);
+      }
+    } catch {
+      // ponytail: deletion UX is separate; keep the tab open if stat/read fails.
+    }
+  }
+}
+
+function startWatchingOpenDocuments() {
+  watchTimer ??= setInterval(checkExternalChanges, 1500);
 }
 
 openButton.addEventListener("click", async () => {
@@ -634,4 +719,5 @@ window.addEventListener("DOMContentLoaded", async () => {
   const paths = await tauri.core.invoke("initial_markdown_paths");
 
   await openMarkdownPaths(paths);
+  startWatchingOpenDocuments();
 });

@@ -10,6 +10,7 @@ fn opens_markdown_document_from_path() {
 
     assert_eq!(document.path, path.to_string_lossy());
     assert!(document.source.contains("Opened from disk."));
+    assert!(!document.version.is_empty());
     assert!(document.html.contains("<h1>Hello</h1>"));
     assert!(document.html.contains("Opened from disk."));
 }
@@ -30,6 +31,10 @@ fn saves_markdown_document_to_original_path() {
     assert!(document.html.contains("<h1>After</h1>"));
     assert_eq!(document.source, "# After\n\nSaved.");
     assert_eq!(
+        document.version,
+        mder::markdown_document_version(path.to_string_lossy().into_owned()).unwrap()
+    );
+    assert_eq!(
         fs::read_dir(dir.path())
             .unwrap()
             .filter(|entry| entry
@@ -41,6 +46,19 @@ fn saves_markdown_document_to_original_path() {
             .count(),
         0
     );
+}
+
+#[test]
+fn markdown_document_version_changes_after_external_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("watch.md");
+    fs::write(&path, "# One").unwrap();
+    let first = mder::markdown_document_version(path.to_string_lossy().into_owned()).unwrap();
+
+    fs::write(&path, "# One\n\nChanged elsewhere.").unwrap();
+    let second = mder::markdown_document_version(path.to_string_lossy().into_owned()).unwrap();
+
+    assert_ne!(first, second);
 }
 
 #[test]
