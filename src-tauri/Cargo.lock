@@ -2224,6 +2224,7 @@ dependencies = [
  "base64 0.22.1",
  "comrak",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

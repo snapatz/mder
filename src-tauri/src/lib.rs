@@ -1,5 +1,6 @@
 mod markdown;
 
+use std::collections::BTreeMap;
 use std::{
     fs,
     io::{self, Write},
@@ -7,8 +8,8 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-use serde::Serialize;
-use tauri::{Emitter, Manager};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, Manager};
 
 #[derive(Debug, Serialize)]
 pub struct OpenedDocument {
@@ -16,6 +17,40 @@ pub struct OpenedDocument {
     pub html: String,
     pub source: String,
     pub version: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AppState {
+    pub theme: Option<String>,
+    pub remote_images: bool,
+    pub recent_paths: Vec<String>,
+    pub open_paths: Vec<String>,
+    pub active_path: Option<String>,
+    pub window: Option<WindowState>,
+    pub documents: BTreeMap<String, DocumentState>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WindowState {
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DocumentState {
+    pub mode: Option<DocumentMode>,
+    pub scroll_top: f64,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DocumentMode {
+    View,
+    Edit,
+    Dual,
 }
 
 pub fn open_markdown_document(path: String) -> Result<OpenedDocument, String> {
@@ -76,6 +111,40 @@ pub fn render_markdown_preview(path: String, source: String) -> Result<String, S
         &source,
         Path::new(&path).parent(),
     ))
+}
+
+pub fn load_app_state(app: AppHandle) -> Result<AppState, String> {
+    app_config_dir(&app).map(|dir| load_app_state_from_dir(&dir))
+}
+
+pub fn save_app_state(app: AppHandle, state: AppState) -> Result<(), String> {
+    let dir = app_config_dir(&app)?;
+    save_app_state_to_dir(&dir, &state)
+        .map_err(|error| format!("Could not save app state: {error}"))
+}
+
+pub fn load_app_state_from_dir(dir: &Path) -> AppState {
+    fs::read_to_string(app_state_path(dir))
+        .ok()
+        .and_then(|contents| serde_json::from_str(&contents).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_app_state_to_dir(dir: &Path, state: &AppState) -> io::Result<()> {
+    fs::create_dir_all(dir)?;
+    let contents = serde_json::to_vec_pretty(state)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    atomic_write(&app_state_path(dir), &contents)
+}
+
+fn app_config_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_config_dir()
+        .map_err(|error| format!("Could not find app config directory: {error}"))
+}
+
+fn app_state_path(dir: &Path) -> PathBuf {
+    dir.join("config.json")
 }
 
 fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
@@ -207,7 +276,8 @@ where
 }
 
 mod commands {
-    use super::OpenedDocument;
+    use super::{AppState, OpenedDocument};
+    use tauri::AppHandle;
 
     #[tauri::command]
     pub fn initial_markdown_paths() -> Vec<String> {
@@ -233,6 +303,16 @@ mod commands {
     pub fn render_markdown_preview(path: String, source: String) -> Result<String, String> {
         super::render_markdown_preview(path, source)
     }
+
+    #[tauri::command]
+    pub fn load_app_state(app: AppHandle) -> Result<AppState, String> {
+        super::load_app_state(app)
+    }
+
+    #[tauri::command]
+    pub fn save_app_state(app: AppHandle, state: AppState) -> Result<(), String> {
+        super::save_app_state(app, state)
+    }
 }
 
 pub fn run() {
@@ -255,7 +335,9 @@ pub fn run() {
             commands::open_markdown_document,
             commands::save_markdown_document,
             commands::markdown_document_version,
-            commands::render_markdown_preview
+            commands::render_markdown_preview,
+            commands::load_app_state,
+            commands::save_app_state
         ])
         .run(tauri::generate_context!())
         .expect("failed to run mder");

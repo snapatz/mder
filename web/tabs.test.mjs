@@ -110,3 +110,16 @@ test("tracks dirty external conflicts until explicit resolution", () => {
   assert.equal(tabs.snapshot().activeTab.dirty, false);
   assert.equal(tabs.snapshot().activeTab.source, "# Disk");
 });
+
+test("restores recent paths without opening tabs", () => {
+  const tabs = createTabStore({
+    recentPaths: ["C:\\docs\\one.md", "C:\\docs\\two.md"]
+  });
+
+  assert.deepEqual(tabs.snapshot().recentPaths, ["C:\\docs\\one.md", "C:\\docs\\two.md"]);
+  assert.equal(tabs.snapshot().tabs.length, 0);
+
+  tabs.setRecentPaths(["C:\\docs\\three.md", "C:\\docs\\one.md"]);
+
+  assert.deepEqual(tabs.snapshot().recentPaths, ["C:\\docs\\three.md", "C:\\docs\\one.md"]);
+});
