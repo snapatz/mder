@@ -1,4 +1,10 @@
 import { EditorView, basicSetup, markdown } from "./vendor/codemirror.mjs";
+import {
+  findMatches,
+  nextMatchIndex,
+  scrollRatio,
+  scrollTopForRatio
+} from "./document-tools.mjs";
 import mermaid from "./vendor/mermaid/mermaid.esm.min.mjs";
 import { createTabStore } from "./tabs.mjs";
 
@@ -7,7 +13,11 @@ const dirtyDiscard = document.getElementById("dirty-discard");
 const dirtyMessage = document.getElementById("dirty-message");
 const dirtyModal = document.getElementById("dirty-modal");
 const dirtySave = document.getElementById("dirty-save");
-const modeToggle = document.getElementById("mode-toggle");
+const findCount = document.getElementById("find-count");
+const findInput = document.getElementById("find");
+const findNext = document.getElementById("find-next");
+const findPrev = document.getElementById("find-prev");
+const modeSelect = document.getElementById("mode");
 const openButton = document.getElementById("open");
 const pathLabel = document.getElementById("path");
 const recent = document.getElementById("recent");
@@ -19,8 +29,13 @@ const viewer = document.getElementById("viewer");
 
 const tauri = window.__TAURI__;
 const tabs = createTabStore();
+let cleanupScrollSync = null;
 let editorView = null;
+let findIndex = -1;
+let findQuery = "";
 let mermaidId = 0;
+let previewRefresh = null;
+let renderedPreview = null;
 
 mermaid.initialize({
   startOnLoad: false,
@@ -36,13 +51,19 @@ function showError(message) {
 function destroyEditor() {
   editorView?.destroy();
   editorView = null;
+  cleanupScrollSync?.();
+  cleanupScrollSync = null;
+  clearTimeout(previewRefresh);
+  previewRefresh = null;
+  renderedPreview = null;
 }
 
 function updateControls(state) {
   const hasTab = Boolean(state.activeTab);
-  modeToggle.disabled = !hasTab;
+  modeSelect.disabled = !hasTab;
+  modeSelect.value = state.activeTab?.mode ?? "view";
   saveButton.disabled = !state.activeTab?.dirty;
-  modeToggle.textContent = state.activeTab?.mode === "edit" ? "Viewer" : "Editor";
+  updateFindControls(state);
 }
 
 function renderRecent(state) {
@@ -85,8 +106,8 @@ function applyTheme() {
   document.body.dataset.theme = theme.value;
 }
 
-function configureRemoteImages() {
-  viewer.querySelectorAll("img[data-remote-src]").forEach((image) => {
+function configureRemoteImages(root = viewer) {
+  root.querySelectorAll("img[data-remote-src]").forEach((image) => {
     if (remoteImages.checked) {
       image.src = image.dataset.remoteSrc;
       image.classList.remove("is-blocked");
@@ -97,18 +118,18 @@ function configureRemoteImages() {
   });
 }
 
-function configureLocalImages() {
-  viewer.querySelectorAll("img[data-local-src]").forEach((image) => {
+function configureLocalImages(root = viewer) {
+  root.querySelectorAll("img[data-local-src]").forEach((image) => {
     image.src = image.dataset.localSrc;
   });
 
-  viewer.querySelectorAll("img.broken-image[data-placeholder-src]").forEach((image) => {
+  root.querySelectorAll("img.broken-image[data-placeholder-src]").forEach((image) => {
     image.src = image.dataset.placeholderSrc;
   });
 }
 
-function highlightCodeBlocks() {
-  viewer.querySelectorAll("pre code").forEach((code) => {
+function highlightCodeBlocks(root = viewer) {
+  root.querySelectorAll("pre code").forEach((code) => {
     if (code.classList.contains("language-mermaid")) {
       return;
     }
@@ -122,8 +143,8 @@ function highlightCodeBlocks() {
   });
 }
 
-async function renderMermaidBlocks() {
-  const blocks = viewer.querySelectorAll("pre[lang='mermaid'] code, code.language-mermaid");
+async function renderMermaidBlocks(root = viewer) {
+  const blocks = root.querySelectorAll("pre[lang='mermaid'] code, code.language-mermaid");
 
   for (const code of blocks) {
     const pre = code.closest("pre");
@@ -141,16 +162,182 @@ async function renderMermaidBlocks() {
   }
 }
 
-async function decorateViewer() {
-  highlightCodeBlocks();
-  await renderMermaidBlocks();
-  configureLocalImages();
-  configureRemoteImages();
+async function decorateViewer(root = viewer) {
+  highlightCodeBlocks(root);
+  await renderMermaidBlocks(root);
+  configureLocalImages(root);
+  configureRemoteImages(root);
 }
 
-function renderEditor(tab) {
-  viewer.className = "viewer editor-host";
-  viewer.replaceChildren();
+function activeFindMatches(state) {
+  return state.activeTab ? findMatches(state.activeTab.source, findQuery) : [];
+}
+
+function updateFindControls(state) {
+  const hasTab = Boolean(state.activeTab);
+  const matches = activeFindMatches(state);
+  if (matches.length && findIndex < 0) {
+    findIndex = 0;
+  }
+  if (findIndex >= matches.length) {
+    findIndex = matches.length - 1;
+  }
+
+  findInput.disabled = !hasTab;
+  findPrev.disabled = !hasTab || matches.length === 0;
+  findNext.disabled = !hasTab || matches.length === 0;
+  findCount.textContent = findQuery ? `${matches.length ? findIndex + 1 : 0}/${matches.length}` : "";
+}
+
+function clearFindHighlights(root) {
+  root.querySelectorAll("mark.find-match").forEach((mark) => {
+    mark.replaceWith(document.createTextNode(mark.textContent ?? ""));
+  });
+  root.normalize();
+}
+
+function applyFindHighlights(root) {
+  clearFindHighlights(root);
+  if (!findQuery) {
+    return;
+  }
+
+  const nodes = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    if (node.nodeValue && !node.parentElement?.closest(".cm-editor, .mermaid-diagram, script, style")) {
+      nodes.push(node);
+    }
+  }
+
+  const needle = findQuery.toLowerCase();
+  let matchNumber = 0;
+  let currentMark = null;
+
+  nodes.forEach((node) => {
+    const text = node.nodeValue;
+    const lower = text.toLowerCase();
+    let cursor = 0;
+    let index = lower.indexOf(needle);
+    if (index === -1) {
+      return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    while (index !== -1) {
+      fragment.append(document.createTextNode(text.slice(cursor, index)));
+      const mark = document.createElement("mark");
+      mark.className = matchNumber === findIndex ? "find-match current" : "find-match";
+      mark.textContent = text.slice(index, index + findQuery.length);
+      if (matchNumber === findIndex) {
+        currentMark = mark;
+      }
+      fragment.append(mark);
+      cursor = index + findQuery.length;
+      matchNumber += 1;
+      index = lower.indexOf(needle, cursor);
+    }
+    fragment.append(document.createTextNode(text.slice(cursor)));
+    node.replaceWith(fragment);
+  });
+
+  currentMark?.scrollIntoView({ block: "center", inline: "nearest" });
+}
+
+function applyEditorFind(state) {
+  if (!editorView || !findQuery) {
+    return;
+  }
+
+  const matches = activeFindMatches(state);
+  const match = matches[findIndex];
+  if (match) {
+    editorView.dispatch({
+      selection: { anchor: match.from, head: match.to },
+      scrollIntoView: true
+    });
+  }
+}
+
+function refreshFindDisplay(state = tabs.snapshot()) {
+  updateFindControls(state);
+  applyEditorFind(state);
+  if (renderedPreview) {
+    applyFindHighlights(renderedPreview);
+  }
+}
+
+function moveFind(direction) {
+  const state = tabs.snapshot();
+  const matches = activeFindMatches(state);
+  findIndex = nextMatchIndex(matches.length, findIndex, direction);
+  refreshFindDisplay(state);
+}
+
+function bindScrollSync(first, second) {
+  let syncing = false;
+
+  const sync = (from, to) => {
+    if (syncing) {
+      return;
+    }
+
+    syncing = true;
+    requestAnimationFrame(() => {
+      to.scrollTop = scrollTopForRatio(
+        to.scrollHeight,
+        to.clientHeight,
+        scrollRatio(from.scrollTop, from.scrollHeight, from.clientHeight)
+      );
+      setTimeout(() => {
+        syncing = false;
+      }, 0);
+    });
+  };
+
+  const syncFirst = () => sync(first, second);
+  const syncSecond = () => sync(second, first);
+  first.addEventListener("scroll", syncFirst);
+  second.addEventListener("scroll", syncSecond);
+
+  return () => {
+    first.removeEventListener("scroll", syncFirst);
+    second.removeEventListener("scroll", syncSecond);
+  };
+}
+
+async function renderPreview(tab, root) {
+  root.innerHTML = tab.dirty
+    ? await tauri.core.invoke("render_markdown_preview", {
+        path: tab.path,
+        source: tab.source
+      })
+    : tab.html;
+  renderedPreview = root;
+  await decorateViewer(root);
+  applyFindHighlights(root);
+}
+
+function queuePreviewRefresh(tab, root) {
+  clearTimeout(previewRefresh);
+  previewRefresh = setTimeout(async () => {
+    if (!root.isConnected) {
+      return;
+    }
+
+    const ratio = scrollRatio(root.scrollTop, root.scrollHeight, root.clientHeight);
+    try {
+      await renderPreview(tab, root);
+      root.scrollTop = scrollTopForRatio(root.scrollHeight, root.clientHeight, ratio);
+    } catch (error) {
+      showError(String(error));
+    }
+  }, 120);
+}
+
+function renderEditor(tab, parent = viewer, onChange) {
+  parent.replaceChildren();
   editorView = new EditorView({
     doc: tab.source,
     extensions: [
@@ -162,11 +349,13 @@ function renderEditor(tab) {
           const state = tabs.updateSource(tab.id, update.state.doc.toString());
           renderTabs(state);
           updateControls(state);
+          onChange?.(state.activeTab, state);
         }
       })
     ],
-    parent: viewer
+    parent
   });
+  applyEditorFind(tabs.snapshot());
   editorView.focus();
 }
 
@@ -185,23 +374,41 @@ async function showState(state) {
 
   pathLabel.textContent = state.activeTab.path;
   if (state.activeTab.mode === "edit") {
+    viewer.className = "viewer editor-host";
     renderEditor(state.activeTab);
+    refreshFindDisplay(state);
+    return;
+  }
+
+  if (state.activeTab.mode === "dual") {
+    viewer.className = "viewer dual-pane-host";
+    viewer.replaceChildren();
+    const editorPane = document.createElement("section");
+    editorPane.className = "dual-editor";
+    const previewPane = document.createElement("section");
+    previewPane.className = "dual-preview";
+    viewer.append(editorPane, previewPane);
+
+    renderEditor(state.activeTab, editorPane, (tab) => queuePreviewRefresh(tab, previewPane));
+    try {
+      await renderPreview(state.activeTab, previewPane);
+    } catch (error) {
+      showError(String(error));
+      return;
+    }
+    cleanupScrollSync = bindScrollSync(editorView.scrollDOM, previewPane);
+    refreshFindDisplay(tabs.snapshot());
     return;
   }
 
   viewer.className = "viewer";
   try {
-    viewer.innerHTML = state.activeTab.dirty
-      ? await tauri.core.invoke("render_markdown_preview", {
-          path: state.activeTab.path,
-          source: state.activeTab.source
-        })
-      : state.activeTab.html;
+    await renderPreview(state.activeTab, viewer);
   } catch (error) {
-    showError(error);
+    showError(String(error));
     return;
   }
-  await decorateViewer();
+  refreshFindDisplay(state);
 }
 
 async function showTab(id) {
@@ -316,17 +523,34 @@ recent.addEventListener("change", async () => {
     await openMarkdownDocument(recent.value);
   }
 });
-modeToggle.addEventListener("click", async () => {
+modeSelect.addEventListener("change", async () => {
   const tab = tabs.snapshot().activeTab;
   if (tab) {
-    await showState(tabs.setMode(tab.id, tab.mode === "edit" ? "view" : "edit"));
+    await showState(tabs.setMode(tab.id, modeSelect.value));
   }
 });
+findInput.addEventListener("input", () => {
+  findQuery = findInput.value;
+  findIndex = findQuery ? 0 : -1;
+  refreshFindDisplay();
+});
+findInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    moveFind(event.shiftKey ? -1 : 1);
+  }
+});
+findPrev.addEventListener("click", () => moveFind(-1));
+findNext.addEventListener("click", () => moveFind(1));
 saveButton.addEventListener("click", saveActiveTab);
 document.addEventListener("keydown", async (event) => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
     event.preventDefault();
     await saveActiveTab();
+  } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+    event.preventDefault();
+    findInput.focus();
+    findInput.select();
   }
 });
 viewer.addEventListener(

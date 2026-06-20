@@ -19,7 +19,15 @@
         <input id="remote-images" type="checkbox">
         <span>Remote images</span>
       </label>
-      <button id="mode-toggle" type="button" disabled>Editor</button>
+      <select id="mode" aria-label="View mode" disabled>
+        <option value="view">Viewer</option>
+        <option value="edit">Editor</option>
+        <option value="dual">Dual Pane</option>
+      </select>
+      <input id="find" type="search" placeholder="Find" aria-label="Find in document" disabled>
+      <button id="find-prev" type="button" disabled>Prev</button>
+      <button id="find-next" type="button" disabled>Next</button>
+      <span id="find-count" aria-live="polite"></span>
       <button id="save" type="button" disabled>Save</button>
       <select id="recent" aria-label="Recent files">
         <option value="">Recent</option>
