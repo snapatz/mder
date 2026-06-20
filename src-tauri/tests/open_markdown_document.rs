@@ -29,6 +29,32 @@ fn saves_markdown_document_to_original_path() {
     assert_eq!(fs::read_to_string(&path).unwrap(), "# After\n\nSaved.");
     assert!(document.html.contains("<h1>After</h1>"));
     assert_eq!(document.source, "# After\n\nSaved.");
+    assert_eq!(
+        fs::read_dir(dir.path())
+            .unwrap()
+            .filter(|entry| entry
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".mder-save-"))
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn renders_dirty_preview_without_saving() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("preview.md");
+    fs::write(&path, "# Saved").unwrap();
+
+    let html =
+        mder::render_markdown_preview(path.to_string_lossy().into_owned(), "# Dirty".to_string())
+            .unwrap();
+
+    assert!(html.contains("<h1>Dirty</h1>"));
+    assert_eq!(fs::read_to_string(&path).unwrap(), "# Saved");
 }
 
 #[test]
