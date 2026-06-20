@@ -18,7 +18,8 @@ fn sanitizer() -> ammonia::Builder<'static> {
     let mut builder = ammonia::Builder::default();
     builder
         .add_tags(["input"])
-        .add_tag_attributes("input", ["checked", "disabled", "type"]);
+        .add_tag_attributes("input", ["checked", "disabled", "type"])
+        .add_allowed_classes("code", ["language-mermaid"]);
     builder
 }
 
@@ -50,5 +51,15 @@ mod tests {
         assert!(html.contains("<table>"));
         assert!(html.contains("<td>C</td>"));
         assert!(!html.contains("<xmp>"));
+    }
+
+    #[test]
+    fn markdown_document_preserves_mermaid_fence_marker() {
+        let html = render_markdown_document(
+            "```mermaid\ngraph TD\n  A --> B\n```\n\n<code class=\"language-bad\">x</code>",
+        );
+
+        assert!(html.contains(r#"<code class="language-mermaid">"#));
+        assert!(!html.contains("language-bad"));
     }
 }
