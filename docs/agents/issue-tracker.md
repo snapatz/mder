@@ -2,8 +2,6 @@
 
 Issues and PRDs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
 
-This clone currently has no GitHub remote. Add one, or pass `--repo OWNER/REPO` to `gh` commands until the remote exists.
-
 ## Conventions
 
 - **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
