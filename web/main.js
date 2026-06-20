@@ -190,7 +190,17 @@ async function showState(state) {
   }
 
   viewer.className = "viewer";
-  viewer.innerHTML = state.activeTab.html;
+  try {
+    viewer.innerHTML = state.activeTab.dirty
+      ? await tauri.core.invoke("render_markdown_preview", {
+          path: state.activeTab.path,
+          source: state.activeTab.source
+        })
+      : state.activeTab.html;
+  } catch (error) {
+    showError(error);
+    return;
+  }
   await decorateViewer();
 }
 

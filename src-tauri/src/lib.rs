@@ -1,6 +1,10 @@
 mod markdown;
 
-use std::{fs, path::Path};
+use std::{
+    fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
 
 use serde::Serialize;
 use tauri::{Emitter, Manager};
@@ -29,11 +33,102 @@ pub fn save_markdown_document(path: String, source: String) -> Result<OpenedDocu
         return Err("Only .md Markdown Documents can be saved".to_string());
     }
 
-    fs::write(&path, &source)
+    let document_path = Path::new(&path);
+    atomic_write(document_path, source.as_bytes())
         .map_err(|error| format!("Could not save Markdown Document: {error}"))?;
-    let html = markdown::render_markdown_document(&source, Path::new(&path).parent());
+    let html = markdown::render_markdown_document(&source, document_path.parent());
 
     Ok(OpenedDocument { path, html, source })
+}
+
+pub fn render_markdown_preview(path: String, source: String) -> Result<String, String> {
+    if !is_markdown_document(&path) {
+        return Err("Only .md Markdown Documents can be previewed".to_string());
+    }
+
+    Ok(markdown::render_markdown_document(
+        &source,
+        Path::new(&path).parent(),
+    ))
+}
+
+fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let temp_path = write_temp_file(path, contents)?;
+    if let Err(error) = replace_file(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn write_temp_file(path: &Path, contents: &[u8]) -> io::Result<PathBuf> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("document");
+
+    for attempt in 0..100 {
+        let temp_path = dir.join(format!(
+            ".{file_name}.mder-save-{}-{attempt}.tmp",
+            std::process::id()
+        ));
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+
+        if let Err(error) = file.write_all(contents).and_then(|_| file.sync_all()) {
+            drop(file);
+            let _ = fs::remove_file(&temp_path);
+            return Err(error);
+        }
+        return Ok(temp_path);
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not create a temp save file",
+    ))
+}
+
+#[cfg(not(windows))]
+fn replace_file(temp_path: &Path, path: &Path) -> io::Result<()> {
+    fs::rename(temp_path, path)
+}
+
+#[cfg(windows)]
+fn replace_file(temp_path: &Path, path: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+
+    #[link(name = "Kernel32")]
+    unsafe extern "system" {
+        fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
+    }
+
+    let existing: Vec<u16> = temp_path.as_os_str().encode_wide().chain([0]).collect();
+    let new: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    let ok = unsafe {
+        MoveFileExW(
+            existing.as_ptr(),
+            new.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+
+    if ok == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 fn is_markdown_document(path: &str) -> bool {
@@ -91,6 +186,11 @@ mod commands {
     pub fn save_markdown_document(path: String, source: String) -> Result<OpenedDocument, String> {
         super::save_markdown_document(path, source)
     }
+
+    #[tauri::command]
+    pub fn render_markdown_preview(path: String, source: String) -> Result<String, String> {
+        super::render_markdown_preview(path, source)
+    }
 }
 
 pub fn run() {
@@ -111,7 +211,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::initial_markdown_paths,
             commands::open_markdown_document,
-            commands::save_markdown_document
+            commands::save_markdown_document,
+            commands::render_markdown_preview
         ])
         .run(tauri::generate_context!())
         .expect("failed to run mder");
