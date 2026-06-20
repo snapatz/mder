@@ -4,14 +4,25 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>mder</title>
+    <link rel="stylesheet" href="./vendor/highlight.css">
     <link rel="stylesheet" href="./styles.css">
   </head>
-  <body>
+  <body data-theme="light">
     <header>
       <button id="open" type="button">File &gt; Open</button>
+      <select id="theme" aria-label="Theme">
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+        <option value="sepia">Sepia</option>
+      </select>
+      <label class="toggle">
+        <input id="remote-images" type="checkbox">
+        <span>Remote images</span>
+      </label>
       <span id="path"></span>
     </header>
     <main id="viewer" class="viewer empty">Open a Markdown Document.</main>
-    <script src="./main.js"></script>
+    <script src="./vendor/highlight.min.js"></script>
+    <script type="module" src="./main.js"></script>
   </body>
 </html>

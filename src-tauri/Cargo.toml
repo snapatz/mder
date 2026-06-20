@@ -8,6 +8,7 @@ tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 ammonia = "4.1.2"
+base64 = "0.22.1"
 comrak = "0.52.0"
 serde = { version = "1.0.228", features = ["derive"] }
 tauri = { version = "2.11.3", features = [] }
