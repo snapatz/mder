@@ -44,6 +44,23 @@ where
         .collect()
 }
 
+fn markdown_paths_from_cwd<I>(paths: I, cwd: &str) -> Vec<String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let cwd = Path::new(cwd);
+    markdown_paths(paths)
+        .into_iter()
+        .map(|path| {
+            if Path::new(&path).is_absolute() {
+                path
+            } else {
+                cwd.join(path).to_string_lossy().into_owned()
+            }
+        })
+        .collect()
+}
+
 mod commands {
     use super::OpenedDocument;
 
@@ -61,8 +78,8 @@ mod commands {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            let paths = markdown_paths(args);
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            let paths = markdown_paths_from_cwd(args, &cwd);
             if paths.is_empty() {
                 return;
             }
@@ -83,13 +100,24 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::markdown_paths;
+    use super::{markdown_paths, markdown_paths_from_cwd};
 
     #[test]
     fn markdown_paths_filters_args() {
         assert_eq!(
             markdown_paths(["mder.exe", "one.md", "two.txt", "THREE.MD"].map(String::from)),
             ["one.md", "THREE.MD"]
+        );
+    }
+
+    #[test]
+    fn markdown_paths_from_cwd_resolves_relative_paths() {
+        assert_eq!(
+            markdown_paths_from_cwd(
+                ["docs\\one.md", "C:\\abs\\two.md"].map(String::from),
+                "C:\\work"
+            ),
+            ["C:\\work\\docs\\one.md", "C:\\abs\\two.md"]
         );
     }
 }
