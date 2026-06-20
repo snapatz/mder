@@ -16,6 +16,16 @@ export function findMatches(text, query) {
   return matches;
 }
 
+export function findMatchesInTexts(texts, query) {
+  return texts.flatMap((text, textIndex) =>
+    findMatches(text, query).map((match) => ({ ...match, textIndex }))
+  );
+}
+
+export function isCurrentPreviewRender(renderId, latestRenderId, source, latestSource) {
+  return renderId === latestRenderId && source === latestSource;
+}
+
 export function nextMatchIndex(count, current, direction) {
   if (count === 0) {
     return -1;
