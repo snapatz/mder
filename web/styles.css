@@ -143,6 +143,10 @@ input[type="search"] {
   border-color: var(--quote);
 }
 
+.tab-item.conflicted {
+  border-color: #b42318;
+}
+
 .tab,
 .tab-close {
   background: transparent;
