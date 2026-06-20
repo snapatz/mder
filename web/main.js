@@ -764,6 +764,7 @@ async function openMarkdownDocument(path, { silent = false } = {}) {
       viewer.textContent = "Loading...";
     }
     const document = await tauri.core.invoke("open_markdown_document", { path });
+    saveActiveDocumentState();
     await showState(restoreActiveDocumentMode(tabs.open(document)));
     scheduleSaveState();
     return true;
