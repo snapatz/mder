@@ -46,3 +46,17 @@ test("tracks dirty edits and blocks dirty close until forced or saved", () => {
   tabs.close(id);
   assert.equal(tabs.snapshot().tabs.length, 0);
 });
+
+test("preserves dirty source while switching viewer editor and dual pane modes", () => {
+  const tabs = createTabStore();
+  const id = tabs.open({ path: "C:\\docs\\one.md", html: "<h1>One</h1>", source: "# One" }).activeId;
+
+  tabs.setMode(id, "edit");
+  tabs.updateSource(id, "# One\n\nChanged.");
+  tabs.setMode(id, "dual");
+  tabs.setMode(id, "view");
+
+  assert.equal(tabs.snapshot().activeTab.mode, "view");
+  assert.equal(tabs.snapshot().activeTab.source, "# One\n\nChanged.");
+  assert.equal(tabs.snapshot().activeTab.dirty, true);
+});
