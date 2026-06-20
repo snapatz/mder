@@ -1,6 +1,8 @@
 import { EditorView, basicSetup, markdown } from "./vendor/codemirror.mjs";
 import {
   findMatches,
+  findMatchesInTexts,
+  isCurrentPreviewRender,
   nextMatchIndex,
   scrollRatio,
   scrollTopForRatio
@@ -35,6 +37,7 @@ let findIndex = -1;
 let findQuery = "";
 let mermaidId = 0;
 let previewRefresh = null;
+let previewRenderId = 0;
 let renderedPreview = null;
 
 mermaid.initialize({
@@ -55,6 +58,7 @@ function destroyEditor() {
   cleanupScrollSync = null;
   clearTimeout(previewRefresh);
   previewRefresh = null;
+  previewRenderId += 1;
   renderedPreview = null;
 }
 
@@ -170,7 +174,18 @@ async function decorateViewer(root = viewer) {
 }
 
 function activeFindMatches(state) {
-  return state.activeTab ? findMatches(state.activeTab.source, findQuery) : [];
+  if (!state.activeTab) {
+    return [];
+  }
+
+  if (state.activeTab.mode !== "edit" && renderedPreview) {
+    return findMatchesInTexts(
+      previewTextNodes(renderedPreview).map((node) => node.nodeValue ?? ""),
+      findQuery
+    );
+  }
+
+  return findMatches(state.activeTab.source, findQuery);
 }
 
 function updateFindControls(state) {
@@ -196,12 +211,7 @@ function clearFindHighlights(root) {
   root.normalize();
 }
 
-function applyFindHighlights(root) {
-  clearFindHighlights(root);
-  if (!findQuery) {
-    return;
-  }
-
+function previewTextNodes(root) {
   const nodes = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   while (walker.nextNode()) {
@@ -210,34 +220,40 @@ function applyFindHighlights(root) {
       nodes.push(node);
     }
   }
+  return nodes;
+}
 
-  const needle = findQuery.toLowerCase();
+function applyFindHighlights(root) {
+  clearFindHighlights(root);
+  if (!findQuery) {
+    return;
+  }
+
+  const nodes = previewTextNodes(root);
   let matchNumber = 0;
   let currentMark = null;
 
   nodes.forEach((node) => {
     const text = node.nodeValue;
-    const lower = text.toLowerCase();
-    let cursor = 0;
-    let index = lower.indexOf(needle);
-    if (index === -1) {
+    const matches = findMatches(text, findQuery);
+    if (matches.length === 0) {
       return;
     }
 
+    let cursor = 0;
     const fragment = document.createDocumentFragment();
-    while (index !== -1) {
-      fragment.append(document.createTextNode(text.slice(cursor, index)));
+    matches.forEach((match) => {
+      fragment.append(document.createTextNode(text.slice(cursor, match.from)));
       const mark = document.createElement("mark");
       mark.className = matchNumber === findIndex ? "find-match current" : "find-match";
-      mark.textContent = text.slice(index, index + findQuery.length);
+      mark.textContent = text.slice(match.from, match.to);
       if (matchNumber === findIndex) {
         currentMark = mark;
       }
       fragment.append(mark);
-      cursor = index + findQuery.length;
+      cursor = match.to;
       matchNumber += 1;
-      index = lower.indexOf(needle, cursor);
-    }
+    });
     fragment.append(document.createTextNode(text.slice(cursor)));
     node.replaceWith(fragment);
   });
@@ -246,7 +262,7 @@ function applyFindHighlights(root) {
 }
 
 function applyEditorFind(state) {
-  if (!editorView || !findQuery) {
+  if (!editorView || !findQuery || state.activeTab?.mode !== "edit") {
     return;
   }
 
@@ -307,20 +323,32 @@ function bindScrollSync(first, second) {
   };
 }
 
-async function renderPreview(tab, root) {
-  root.innerHTML = tab.dirty
+async function renderPreview(tab, root, renderId = ++previewRenderId) {
+  const source = tab.source;
+  const html = tab.dirty
     ? await tauri.core.invoke("render_markdown_preview", {
         path: tab.path,
-        source: tab.source
+        source
       })
     : tab.html;
+
+  if (!root.isConnected || !isCurrentPreviewRender(renderId, previewRenderId, source, tab.source)) {
+    return false;
+  }
+
+  root.innerHTML = html;
   renderedPreview = root;
   await decorateViewer(root);
+  if (!root.isConnected || !isCurrentPreviewRender(renderId, previewRenderId, source, tab.source)) {
+    return false;
+  }
   applyFindHighlights(root);
+  return true;
 }
 
 function queuePreviewRefresh(tab, root) {
   clearTimeout(previewRefresh);
+  const renderId = ++previewRenderId;
   previewRefresh = setTimeout(async () => {
     if (!root.isConnected) {
       return;
@@ -328,8 +356,10 @@ function queuePreviewRefresh(tab, root) {
 
     const ratio = scrollRatio(root.scrollTop, root.scrollHeight, root.clientHeight);
     try {
-      await renderPreview(tab, root);
-      root.scrollTop = scrollTopForRatio(root.scrollHeight, root.clientHeight, ratio);
+      if (await renderPreview(tab, root, renderId)) {
+        refreshFindDisplay(tabs.snapshot());
+        root.scrollTop = scrollTopForRatio(root.scrollHeight, root.clientHeight, ratio);
+      }
     } catch (error) {
       showError(String(error));
     }
@@ -390,20 +420,24 @@ async function showState(state) {
     viewer.append(editorPane, previewPane);
 
     renderEditor(state.activeTab, editorPane, (tab) => queuePreviewRefresh(tab, previewPane));
+    cleanupScrollSync = bindScrollSync(editorView.scrollDOM, previewPane);
     try {
-      await renderPreview(state.activeTab, previewPane);
+      if (!(await renderPreview(state.activeTab, previewPane))) {
+        return;
+      }
     } catch (error) {
       showError(String(error));
       return;
     }
-    cleanupScrollSync = bindScrollSync(editorView.scrollDOM, previewPane);
     refreshFindDisplay(tabs.snapshot());
     return;
   }
 
   viewer.className = "viewer";
   try {
-    await renderPreview(state.activeTab, viewer);
+    if (!(await renderPreview(state.activeTab, viewer))) {
+      return;
+    }
   } catch (error) {
     showError(String(error));
     return;
