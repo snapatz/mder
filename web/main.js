@@ -874,17 +874,25 @@ viewer.addEventListener(
 );
 viewer.addEventListener("scroll", scheduleSaveState, true);
 
-async function closeDirtyTabsForApp() {
+async function resolveDirtyTabsForAppClose() {
+  const discarded = new Set();
+
   while (true) {
-    const dirtyTab = tabs.snapshot().tabs.find((tab) => tab.dirty);
+    const dirtyTab = tabs.snapshot().tabs.find((tab) => tab.dirty && !discarded.has(tab.id));
     if (!dirtyTab) {
       return true;
     }
 
     await showTab(dirtyTab.id);
-    const closed = await closeTab(dirtyTab.id);
-    if (!closed) {
+    const choice = await promptDirtyTab(dirtyTab);
+    if (choice === "cancel") {
       return false;
+    }
+    if (choice === "primary" && !(await saveTab(dirtyTab))) {
+      return false;
+    }
+    if (choice === "secondary") {
+      discarded.add(dirtyTab.id);
     }
   }
 }
@@ -902,7 +910,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
     event.preventDefault();
     if (tabs.snapshot().tabs.some((tab) => tab.dirty)) {
-      if (!(await closeDirtyTabsForApp())) {
+      if (!(await resolveDirtyTabsForAppClose())) {
         return;
       }
     }
