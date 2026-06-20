@@ -944,6 +944,8 @@ window.addEventListener("DOMContentLoaded", async () => {
   }
 
   stateReady = true;
-  await saveAppStateNow().catch(() => {});
+  if (startupPaths.length > 0) {
+    scheduleSaveState();
+  }
   startWatchingOpenDocuments();
 });
