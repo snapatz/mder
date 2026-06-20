@@ -31,10 +31,20 @@ fn sanitizer() -> ammonia::Builder<'static> {
     builder
         .add_tags(["input"])
         .add_tag_attributes("input", ["checked", "disabled", "type"])
-        .add_tag_attributes("img", ["data-remote-src"])
+        .add_tag_attributes(
+            "img",
+            ["data-local-src", "data-placeholder-src", "data-remote-src"],
+        )
         .add_allowed_classes("code", ["language-mermaid"])
         .add_allowed_classes("img", ["remote-image", "is-blocked", "broken-image"])
-        .add_url_schemes(["data"]);
+        .attribute_filter(|element, attribute, value| match (element, attribute) {
+            ("img", "src") if is_remote_src(value) || value.starts_with("data:") => None,
+            ("img", "data-local-src") if is_basic_image_data_url(value) => Some(value.into()),
+            ("img", "data-placeholder-src") if value == IMAGE_PLACEHOLDER => Some(value.into()),
+            ("img", "data-remote-src") if is_remote_src(value) => Some(value.into()),
+            ("img", "data-local-src" | "data-placeholder-src" | "data-remote-src") => None,
+            _ => Some(value.into()),
+        });
     builder
 }
 
@@ -42,7 +52,7 @@ fn rewrite_images(html: &str, base_dir: Option<&Path>) -> String {
     let mut out = String::with_capacity(html.len());
     let mut rest = html;
 
-    while let Some(start) = rest.find("<img ") {
+    while let Some(start) = find_image_tag_start(rest) {
         out.push_str(&rest[..start]);
         rest = &rest[start..];
 
@@ -60,6 +70,28 @@ fn rewrite_images(html: &str, base_dir: Option<&Path>) -> String {
     out
 }
 
+fn find_image_tag_start(html: &str) -> Option<usize> {
+    let bytes = html.as_bytes();
+    let mut cursor = 0;
+
+    while let Some(offset) = html[cursor..].find('<') {
+        let start = cursor + offset;
+
+        if bytes.len() >= start + 4
+            && bytes[start + 1..start + 4].eq_ignore_ascii_case(b"img")
+            && bytes
+                .get(start + 4)
+                .is_some_and(|byte| byte.is_ascii_whitespace() || matches!(byte, b'/' | b'>'))
+        {
+            return Some(start);
+        }
+
+        cursor = start + 1;
+    }
+
+    None
+}
+
 fn rewrite_image_tag(tag: &str, base_dir: Option<&Path>) -> String {
     let Some((value_start, value_end, src)) = find_src(tag) else {
         return tag.to_string();
@@ -67,19 +99,22 @@ fn rewrite_image_tag(tag: &str, base_dir: Option<&Path>) -> String {
 
     if is_remote_src(src) {
         return with_extra_attrs(
-            &replace_attr_value(tag, value_start, value_end, IMAGE_PLACEHOLDER),
+            &replace_attr_value(tag, value_start, value_end, ""),
             &format!(
-                r#" class="remote-image is-blocked" data-remote-src="{}""#,
+                r#" class="remote-image is-blocked" data-placeholder-src="{IMAGE_PLACEHOLDER}" data-remote-src="{}""#,
                 escape_attr(src)
             ),
         );
     }
 
     match local_image_data_url(src, base_dir) {
-        Some(data_url) => replace_attr_value(tag, value_start, value_end, &data_url),
+        Some(data_url) => with_extra_attrs(
+            &replace_attr_value(tag, value_start, value_end, ""),
+            &format!(r#" data-local-src="{}""#, escape_attr(&data_url)),
+        ),
         None => with_extra_attrs(
-            &replace_attr_value(tag, value_start, value_end, IMAGE_PLACEHOLDER),
-            r#" class="broken-image""#,
+            &replace_attr_value(tag, value_start, value_end, ""),
+            &format!(r#" class="broken-image" data-placeholder-src="{IMAGE_PLACEHOLDER}""#),
         ),
     }
 }
@@ -163,7 +198,7 @@ fn with_extra_attrs(tag: &str, attrs: &str) -> String {
 
 fn local_image_data_url(src: &str, base_dir: Option<&Path>) -> Option<String> {
     if src.starts_with("data:") {
-        return is_image_data_url(src).then(|| src.to_string());
+        return None;
     }
 
     let path = local_image_path(src, base_dir)?;
@@ -181,13 +216,12 @@ fn local_image_data_url(src: &str, base_dir: Option<&Path>) -> Option<String> {
     ))
 }
 
-fn is_image_data_url(src: &str) -> bool {
+fn is_basic_image_data_url(src: &str) -> bool {
     let src = src.to_ascii_lowercase();
     [
         "data:image/gif;",
         "data:image/jpeg;",
         "data:image/png;",
-        "data:image/svg+xml;",
         "data:image/webp;",
     ]
     .iter()
@@ -220,6 +254,7 @@ fn image_mime_type(path: &Path) -> Option<&'static str> {
 }
 
 fn is_remote_src(src: &str) -> bool {
+    let src = src.to_ascii_lowercase();
     src.starts_with("http://") || src.starts_with("https://")
 }
 
@@ -259,6 +294,24 @@ mod tests {
 
         assert!(!html.contains("data:text/html"));
         assert!(html.contains("broken-image"));
+    }
+
+    #[test]
+    fn markdown_document_blocks_data_links() {
+        let html = render_markdown_document("[bad](data:text/html,hello)", None);
+
+        assert!(!html.contains("data:text/html"));
+    }
+
+    #[test]
+    fn markdown_document_blocks_raw_html_remote_images() {
+        let html = render_markdown_document(
+            "<IMG SRC=\"HTTPS://example.com/a.png\"><img\nsrc=\"https://example.com/b.png\">",
+            None,
+        );
+
+        assert_eq!(html.matches("data-remote-src=").count(), 2);
+        assert!(!html.contains(" src=\"https://"));
     }
 
     #[test]

@@ -41,7 +41,11 @@ fn relative_local_image_is_embedded() {
 
     let document = mder::open_markdown_document(markdown.to_string_lossy().into_owned()).unwrap();
 
-    assert!(document.html.contains("src=\"data:image/png;base64,"));
+    assert!(
+        document
+            .html
+            .contains("data-local-src=\"data:image/png;base64,")
+    );
 }
 
 #[test]
@@ -55,7 +59,11 @@ fn absolute_local_image_is_embedded() {
 
     let document = mder::open_markdown_document(markdown.to_string_lossy().into_owned()).unwrap();
 
-    assert!(document.html.contains("src=\"data:image/png;base64,"));
+    assert!(
+        document
+            .html
+            .contains("data-local-src=\"data:image/png;base64,")
+    );
 }
 
 #[test]

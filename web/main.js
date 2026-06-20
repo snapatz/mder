@@ -26,15 +26,23 @@ function applyTheme() {
 
 function configureRemoteImages() {
   viewer.querySelectorAll("img[data-remote-src]").forEach((image) => {
-    image.dataset.placeholderSrc ||= image.src;
-
     if (remoteImages.checked) {
       image.src = image.dataset.remoteSrc;
       image.classList.remove("is-blocked");
     } else {
-      image.src = image.dataset.placeholderSrc;
+      image.src = image.dataset.placeholderSrc || "";
       image.classList.add("is-blocked");
     }
+  });
+}
+
+function configureLocalImages() {
+  viewer.querySelectorAll("img[data-local-src]").forEach((image) => {
+    image.src = image.dataset.localSrc;
+  });
+
+  viewer.querySelectorAll("img.broken-image[data-placeholder-src]").forEach((image) => {
+    image.src = image.dataset.placeholderSrc;
   });
 }
 
@@ -75,6 +83,7 @@ async function renderMermaidBlocks() {
 async function decorateViewer() {
   highlightCodeBlocks();
   await renderMermaidBlocks();
+  configureLocalImages();
   configureRemoteImages();
 }
 
