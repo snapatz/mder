@@ -101,9 +101,57 @@ select {
 
 #path {
   color: var(--muted);
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tabs {
+  align-items: center;
+  background: var(--bar-bg);
+  border-bottom: 1px solid var(--bar-border);
+  display: flex;
+  gap: 6px;
+  min-height: 42px;
+  overflow-x: auto;
+  padding: 6px 12px;
+}
+
+.tab-item {
+  align-items: center;
+  border: 1px solid var(--bar-border);
+  border-radius: 7px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  max-width: 240px;
+  overflow: hidden;
+}
+
+.tab,
+.tab-close {
+  background: transparent;
+  color: var(--text);
+  min-height: 30px;
+}
+
+.tab {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab.active {
+  background: var(--button-bg);
+  color: var(--button-text);
+}
+
+.tab-close {
+  border-left: 1px solid var(--bar-border);
+  border-radius: 0;
+  color: var(--muted);
+  padding: 0 9px;
 }
 
 .viewer {
@@ -112,7 +160,7 @@ select {
   line-height: 1.72;
   margin: 0 auto;
   max-width: 820px;
-  min-height: calc(100vh - 48px);
+  min-height: calc(100vh - 90px);
   padding: 44px 32px 72px;
   transition: background 120ms ease, color 120ms ease;
 }
@@ -241,8 +289,12 @@ select {
     flex-basis: 100%;
   }
 
+  .tabs {
+    min-height: 44px;
+  }
+
   .viewer {
-    min-height: calc(100vh - 96px);
+    min-height: calc(100vh - 140px);
     padding: 28px 18px 48px;
   }
 }
