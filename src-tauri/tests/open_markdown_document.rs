@@ -19,3 +19,14 @@ fn missing_markdown_document_returns_recoverable_error() {
 
     assert!(error.contains("Could not open Markdown Document"));
 }
+
+#[test]
+fn non_markdown_document_returns_recoverable_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hello.txt");
+    fs::write(&path, "# Hello").unwrap();
+
+    let error = mder::open_markdown_document(path.to_string_lossy().into_owned()).unwrap_err();
+
+    assert!(error.contains("Only .md Markdown Documents"));
+}
