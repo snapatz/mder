@@ -1,0 +1,53 @@
+mod markdown;
+
+use std::fs;
+
+use serde::Serialize;
+
+#[derive(Debug, Serialize)]
+pub struct OpenedDocument {
+    pub path: String,
+    pub html: String,
+}
+
+pub fn open_markdown_document(path: String) -> Result<OpenedDocument, String> {
+    let source = fs::read_to_string(&path)
+        .map_err(|error| format!("Could not open Markdown Document: {error}"))?;
+
+    Ok(OpenedDocument {
+        path,
+        html: markdown::render_markdown_document(&source),
+    })
+}
+
+pub fn initial_markdown_paths() -> Vec<String> {
+    std::env::args()
+        .skip(1)
+        .filter(|path| path.to_ascii_lowercase().ends_with(".md"))
+        .collect()
+}
+
+mod commands {
+    use super::OpenedDocument;
+
+    #[tauri::command]
+    pub fn initial_markdown_paths() -> Vec<String> {
+        super::initial_markdown_paths()
+    }
+
+    #[tauri::command]
+    pub fn open_markdown_document(path: String) -> Result<OpenedDocument, String> {
+        super::open_markdown_document(path)
+    }
+}
+
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![
+            commands::initial_markdown_paths,
+            commands::open_markdown_document
+        ])
+        .run(tauri::generate_context!())
+        .expect("failed to run mder");
+}
