@@ -17,11 +17,9 @@ pub fn open_markdown_document(path: String) -> Result<OpenedDocument, String> {
 
     let source = fs::read_to_string(&path)
         .map_err(|error| format!("Could not open Markdown Document: {error}"))?;
+    let html = markdown::render_markdown_document(&source, Path::new(&path).parent());
 
-    Ok(OpenedDocument {
-        path,
-        html: markdown::render_markdown_document(&source),
-    })
+    Ok(OpenedDocument { path, html })
 }
 
 fn is_markdown_document(path: &str) -> bool {
