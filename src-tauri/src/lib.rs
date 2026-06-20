@@ -93,7 +93,7 @@ fn document_version(path: &Path) -> io::Result<String> {
         .modified()?
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis();
+        .as_nanos();
 
     Ok(format!("{}:{modified}", metadata.len()))
 }

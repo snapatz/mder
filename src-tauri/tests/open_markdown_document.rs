@@ -62,6 +62,26 @@ fn markdown_document_version_changes_after_external_write() {
 }
 
 #[test]
+fn markdown_document_version_changes_for_same_length_external_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("watch.md");
+    fs::write(&path, "# One").unwrap();
+    let first = mder::markdown_document_version(path.to_string_lossy().into_owned()).unwrap();
+
+    let mut second = first.clone();
+    for _ in 0..20 {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        fs::write(&path, "# Two").unwrap();
+        second = mder::markdown_document_version(path.to_string_lossy().into_owned()).unwrap();
+        if second != first {
+            break;
+        }
+    }
+
+    assert_ne!(first, second);
+}
+
+#[test]
 fn renders_dirty_preview_without_saving() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("preview.md");
