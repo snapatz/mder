@@ -633,7 +633,9 @@ async function showStateForChangedTab(state, id) {
 }
 
 async function showTab(id) {
-  saveActiveDocumentState();
+  if (stateReady) {
+    saveActiveDocumentState();
+  }
   await showState(tabs.switchTo(id));
   scheduleSaveState();
 }
@@ -764,7 +766,9 @@ async function openMarkdownDocument(path, { silent = false } = {}) {
       viewer.textContent = "Loading...";
     }
     const document = await tauri.core.invoke("open_markdown_document", { path });
-    saveActiveDocumentState();
+    if (stateReady) {
+      saveActiveDocumentState();
+    }
     await showState(restoreActiveDocumentMode(tabs.open(document)));
     scheduleSaveState();
     return true;
