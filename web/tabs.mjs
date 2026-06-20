@@ -1,8 +1,8 @@
-export function createTabStore() {
+export function createTabStore(initial = {}) {
   let nextId = 1;
   let activeId = null;
   const tabs = [];
-  const recentPaths = [];
+  const recentPaths = Array.isArray(initial.recentPaths) ? [...initial.recentPaths] : [];
 
   function snapshot() {
     return {
@@ -115,6 +115,13 @@ export function createTabStore() {
       if (tab) {
         tab.mode = mode;
       }
+      return snapshot();
+    },
+    setRecentPaths(paths) {
+      recentPaths.splice(0, recentPaths.length);
+      paths
+        .filter((path) => typeof path === "string" && !recentPaths.includes(path))
+        .forEach((path) => recentPaths.push(path));
       return snapshot();
     },
     snapshot,

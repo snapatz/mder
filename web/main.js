@@ -32,6 +32,9 @@ const viewer = document.getElementById("viewer");
 
 const tauri = window.__TAURI__;
 const tabs = createTabStore();
+let appCloseRequested = false;
+let appState = {};
+let appWindow = null;
 let cleanupScrollSync = null;
 let editorView = null;
 let findIndex = -1;
@@ -40,6 +43,8 @@ let mermaidId = 0;
 let previewRefresh = null;
 let previewRenderId = 0;
 let renderedPreview = null;
+let saveStateTimer = null;
+let stateReady = false;
 let watchTimer = null;
 
 mermaid.initialize({
@@ -110,6 +115,170 @@ function renderTabs(state) {
 
 function applyTheme() {
   document.body.dataset.theme = theme.value;
+}
+
+function isDocumentMode(value) {
+  return value === "view" || value === "edit" || value === "dual";
+}
+
+function isTheme(value) {
+  return [...theme.options].some((option) => option.value === value);
+}
+
+function normalizeWindowState(windowState) {
+  const width = Math.round(Number(windowState?.width));
+  const height = Math.round(Number(windowState?.height));
+  if (width < 320 || height < 240) {
+    return null;
+  }
+  return { width, height };
+}
+
+function markdownPaths(paths) {
+  return Array.isArray(paths)
+    ? paths.filter((path) => typeof path === "string" && path.toLowerCase().endsWith(".md"))
+    : [];
+}
+
+async function loadStoredAppState() {
+  try {
+    return await tauri.core.invoke("load_app_state");
+  } catch {
+    return {};
+  }
+}
+
+function applyStoredPreferences() {
+  if (isTheme(appState.theme)) {
+    theme.value = appState.theme;
+  }
+  remoteImages.checked = Boolean(appState.remoteImages);
+  tabs.setRecentPaths(appState.recentPaths ?? []);
+  applyTheme();
+  renderRecent(tabs.snapshot());
+}
+
+function activeScrollContainer() {
+  if (renderedPreview?.isConnected) {
+    return renderedPreview;
+  }
+  if (editorView?.scrollDOM?.isConnected) {
+    return editorView.scrollDOM;
+  }
+  return viewer;
+}
+
+function saveActiveDocumentState() {
+  const tab = tabs.snapshot().activeTab;
+  if (!tab) {
+    return;
+  }
+
+  const currentDocument = appState.documents?.[tab.path] ?? {};
+  appState = {
+    ...appState,
+    documents: {
+      ...(appState.documents ?? {}),
+      [tab.path]: {
+        ...currentDocument,
+        mode: tab.mode,
+        scrollTop: activeScrollContainer()?.scrollTop ?? currentDocument.scrollTop ?? 0
+      }
+    }
+  };
+}
+
+function restoreActiveScroll(state) {
+  const tab = state.activeTab;
+  const scrollTop = appState.documents?.[tab?.path]?.scrollTop;
+  if (!tab || typeof scrollTop !== "number" || scrollTop <= 0) {
+    return;
+  }
+
+  requestAnimationFrame(() => {
+    activeScrollContainer().scrollTop = scrollTop;
+  });
+}
+
+function restoreActiveDocumentMode(state) {
+  const tab = state.activeTab;
+  const mode = appState.documents?.[tab?.path]?.mode;
+  if (tab && isDocumentMode(mode)) {
+    return tabs.setMode(tab.id, mode);
+  }
+  return state;
+}
+
+async function currentWindowState() {
+  try {
+    return normalizeWindowState(await appWindow?.outerSize?.()) ?? normalizeWindowState(appState.window);
+  } catch {
+    return normalizeWindowState(appState.window);
+  }
+}
+
+async function restoreWindowSize() {
+  const size = normalizeWindowState(appState.window);
+  if (!size || !appWindow?.setSize) {
+    return;
+  }
+
+  try {
+    if (tauri.dpi?.PhysicalSize) {
+      await appWindow.setSize(new tauri.dpi.PhysicalSize(size.width, size.height));
+    } else {
+      await appWindow.setSize({ Physical: size });
+    }
+  } catch {
+    // Invalid persisted window state should not block opening Markdown Documents.
+  }
+}
+
+function buildAppState(windowState) {
+  saveActiveDocumentState();
+  const state = tabs.snapshot();
+  const documents = { ...(appState.documents ?? {}) };
+
+  state.tabs.forEach((tab) => {
+    const currentDocument = documents[tab.path] ?? {};
+    documents[tab.path] = {
+      ...currentDocument,
+      mode: tab.mode,
+      scrollTop: tab.id === state.activeId ? activeScrollContainer().scrollTop : currentDocument.scrollTop ?? 0
+    };
+  });
+
+  return {
+    theme: theme.value,
+    remoteImages: remoteImages.checked,
+    recentPaths: state.recentPaths,
+    openPaths: state.tabs.map((tab) => tab.path),
+    activePath: state.activeTab?.path ?? null,
+    window: windowState,
+    documents
+  };
+}
+
+async function saveAppStateNow() {
+  if (!stateReady) {
+    return;
+  }
+
+  clearTimeout(saveStateTimer);
+  saveStateTimer = null;
+  appState = buildAppState(await currentWindowState());
+  await tauri.core.invoke("save_app_state", { state: appState });
+}
+
+function scheduleSaveState() {
+  if (!stateReady) {
+    return;
+  }
+
+  clearTimeout(saveStateTimer);
+  saveStateTimer = setTimeout(() => {
+    saveAppStateNow().catch(() => {});
+  }, 250);
 }
 
 function configureRemoteImages(root = viewer) {
@@ -411,6 +580,7 @@ async function showState(state) {
     viewer.className = "viewer editor-host";
     renderEditor(state.activeTab);
     refreshFindDisplay(state);
+    restoreActiveScroll(state);
     return;
   }
 
@@ -434,6 +604,7 @@ async function showState(state) {
       return;
     }
     refreshFindDisplay(tabs.snapshot());
+    restoreActiveScroll(tabs.snapshot());
     return;
   }
 
@@ -447,10 +618,12 @@ async function showState(state) {
     return;
   }
   refreshFindDisplay(state);
+  restoreActiveScroll(state);
 }
 
 async function showStateForChangedTab(state, id) {
   if (state.activeId === id) {
+    saveActiveDocumentState();
     await showState(state);
   } else {
     renderTabs(state);
@@ -460,7 +633,9 @@ async function showStateForChangedTab(state, id) {
 }
 
 async function showTab(id) {
+  saveActiveDocumentState();
   await showState(tabs.switchTo(id));
+  scheduleSaveState();
 }
 
 function promptChoice({ title, message, primary, secondary, cancel }) {
@@ -539,6 +714,7 @@ async function saveTab(tab) {
       source: tab.source
     });
     await showState(tabs.markSaved(tab.id, document));
+    scheduleSaveState();
     return document;
   } catch (error) {
     showError(String(error));
@@ -554,9 +730,14 @@ async function saveActiveTab() {
 }
 
 async function closeTab(id) {
+  if (tabs.snapshot().activeId === id) {
+    saveActiveDocumentState();
+  }
+
   const nextState = tabs.close(id);
   if (!nextState.blockedCloseId) {
     await showState(nextState);
+    scheduleSaveState();
     return true;
   }
 
@@ -572,29 +753,31 @@ async function closeTab(id) {
     }
   }
   await showState(tabs.forceClose(tab.id));
+  scheduleSaveState();
   return true;
 }
 
-async function openMarkdownDocument(path) {
+async function openMarkdownDocument(path, { silent = false } = {}) {
   try {
-    viewer.className = "viewer loading";
-    viewer.textContent = "Loading...";
+    if (!silent) {
+      viewer.className = "viewer loading";
+      viewer.textContent = "Loading...";
+    }
     const document = await tauri.core.invoke("open_markdown_document", { path });
-    await showState(tabs.open(document));
+    await showState(restoreActiveDocumentMode(tabs.open(document)));
+    scheduleSaveState();
+    return true;
   } catch (error) {
-    showError(String(error));
+    if (!silent) {
+      showError(String(error));
+    }
+    return false;
   }
 }
 
-async function openMarkdownPaths(paths) {
-  if (!Array.isArray(paths)) {
-    return;
-  }
-
-  for (const path of paths.filter(
-    (path) => typeof path === "string" && path.toLowerCase().endsWith(".md")
-  )) {
-    await openMarkdownDocument(path);
+async function openMarkdownPaths(paths, options = {}) {
+  for (const path of markdownPaths(paths)) {
+    await openMarkdownDocument(path, options);
   }
 }
 
@@ -635,8 +818,14 @@ openButton.addEventListener("click", async () => {
   }
 });
 
-theme.addEventListener("change", applyTheme);
-remoteImages.addEventListener("change", configureRemoteImages);
+theme.addEventListener("change", () => {
+  applyTheme();
+  scheduleSaveState();
+});
+remoteImages.addEventListener("change", () => {
+  configureRemoteImages();
+  scheduleSaveState();
+});
 recent.addEventListener("change", async () => {
   if (recent.value) {
     await openMarkdownDocument(recent.value);
@@ -645,7 +834,9 @@ recent.addEventListener("change", async () => {
 modeSelect.addEventListener("change", async () => {
   const tab = tabs.snapshot().activeTab;
   if (tab) {
+    saveActiveDocumentState();
     await showState(tabs.setMode(tab.id, modeSelect.value));
+    scheduleSaveState();
   }
 });
 findInput.addEventListener("input", () => {
@@ -681,6 +872,7 @@ viewer.addEventListener(
   },
   true
 );
+viewer.addEventListener("scroll", scheduleSaveState, true);
 
 async function closeDirtyTabsForApp() {
   while (true) {
@@ -698,15 +890,26 @@ async function closeDirtyTabsForApp() {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
-  applyTheme();
-  const appWindow = tauri.window?.getCurrentWindow?.();
+  appWindow = tauri.window?.getCurrentWindow?.();
+  appState = await loadStoredAppState();
+  applyStoredPreferences();
+  await restoreWindowSize();
+  await appWindow?.onResized(() => scheduleSaveState());
   await appWindow?.onCloseRequested(async (event) => {
+    if (appCloseRequested) {
+      return;
+    }
+
+    event.preventDefault();
     if (tabs.snapshot().tabs.some((tab) => tab.dirty)) {
-      event.preventDefault();
-      if (await closeDirtyTabsForApp()) {
-        await appWindow.close();
+      if (!(await closeDirtyTabsForApp())) {
+        return;
       }
     }
+
+    await saveAppStateNow().catch(() => {});
+    appCloseRequested = true;
+    await appWindow.close();
   });
 
   await tauri.event.listen("tauri://drag-drop", async (event) => {
@@ -717,7 +920,21 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
 
   const paths = await tauri.core.invoke("initial_markdown_paths");
+  const startupPaths = markdownPaths(paths);
+  const restorePaths = markdownPaths(appState.openPaths);
 
-  await openMarkdownPaths(paths);
+  await openMarkdownPaths(startupPaths.length ? startupPaths : restorePaths, {
+    silent: startupPaths.length === 0
+  });
+
+  if (startupPaths.length === 0 && appState.activePath) {
+    const tab = tabs.snapshot().tabs.find((tab) => tab.path === appState.activePath);
+    if (tab) {
+      await showTab(tab.id);
+    }
+  }
+
+  stateReady = true;
+  await saveAppStateNow().catch(() => {});
   startWatchingOpenDocuments();
 });
