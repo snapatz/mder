@@ -19,6 +19,8 @@
         <input id="remote-images" type="checkbox">
         <span>Remote images</span>
       </label>
+      <button id="mode-toggle" type="button" disabled>Editor</button>
+      <button id="save" type="button" disabled>Save</button>
       <select id="recent" aria-label="Recent files">
         <option value="">Recent</option>
       </select>
@@ -26,6 +28,17 @@
     </header>
     <nav id="tabs" class="tabs" aria-label="Open Markdown Documents"></nav>
     <main id="viewer" class="viewer empty">Open a Markdown Document.</main>
+    <div id="dirty-modal" class="modal" hidden>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="dirty-title">
+        <h2 id="dirty-title">Unsaved changes</h2>
+        <p id="dirty-message"></p>
+        <div class="modal-actions">
+          <button id="dirty-save" type="button">Save</button>
+          <button id="dirty-discard" type="button">Don't Save</button>
+          <button id="dirty-cancel" type="button">Cancel</button>
+        </div>
+      </section>
+    </div>
     <script src="./vendor/highlight.min.js"></script>
     <script type="module" src="./main.js"></script>
   </body>

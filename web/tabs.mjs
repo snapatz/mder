@@ -28,16 +28,46 @@ export function createTabStore() {
         return snapshot();
       }
 
+      if (tabs[index].dirty) {
+        return { ...snapshot(), blockedCloseId: id };
+      }
+
       tabs.splice(index, 1);
       if (activeId === id) {
         activeId = tabs[index]?.id ?? tabs[index - 1]?.id ?? null;
       }
       return snapshot();
     },
+    forceClose(id) {
+      const index = tabs.findIndex((tab) => tab.id === id);
+      if (index === -1) {
+        return snapshot();
+      }
+
+      tabs.splice(index, 1);
+      if (activeId === id) {
+        activeId = tabs[index]?.id ?? tabs[index - 1]?.id ?? null;
+      }
+      return snapshot();
+    },
+    markSaved(id, document) {
+      const tab = tabs.find((tab) => tab.id === id);
+      if (tab) {
+        tab.html = document.html;
+        tab.source = document.source;
+        tab.savedSource = document.source;
+        tab.dirty = false;
+      }
+      return snapshot();
+    },
     open(document) {
       const tab = {
+        dirty: false,
         id: nextId++,
         path: document.path,
+        mode: "view",
+        savedSource: document.source,
+        source: document.source,
         title: document.path.split(/[\\/]/).pop() || document.path,
         html: document.html
       };
@@ -46,10 +76,25 @@ export function createTabStore() {
       remember(tab.path);
       return snapshot();
     },
+    setMode(id, mode) {
+      const tab = tabs.find((tab) => tab.id === id);
+      if (tab) {
+        tab.mode = mode;
+      }
+      return snapshot();
+    },
     snapshot,
     switchTo(id) {
       if (tabs.some((tab) => tab.id === id)) {
         activeId = id;
+      }
+      return snapshot();
+    },
+    updateSource(id, source) {
+      const tab = tabs.find((tab) => tab.id === id);
+      if (tab) {
+        tab.source = source;
+        tab.dirty = source !== tab.savedSource;
       }
       return snapshot();
     }

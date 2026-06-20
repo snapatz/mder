@@ -8,10 +8,13 @@
     "build": "tauri build"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.11.3"
+    "@tauri-apps/cli": "2.11.3",
+    "esbuild": "^0.28.1"
   },
   "dependencies": {
+    "@codemirror/lang-markdown": "^6.5.0",
     "@highlightjs/cdn-assets": "^11.11.1",
+    "codemirror": "^6.0.2",
     "mermaid": "^11.15.0"
   }
 }
