@@ -9,6 +9,7 @@ use tauri::{Emitter, Manager};
 pub struct OpenedDocument {
     pub path: String,
     pub html: String,
+    pub source: String,
 }
 
 pub fn open_markdown_document(path: String) -> Result<OpenedDocument, String> {
@@ -20,7 +21,19 @@ pub fn open_markdown_document(path: String) -> Result<OpenedDocument, String> {
         .map_err(|error| format!("Could not open Markdown Document: {error}"))?;
     let html = markdown::render_markdown_document(&source, Path::new(&path).parent());
 
-    Ok(OpenedDocument { path, html })
+    Ok(OpenedDocument { path, html, source })
+}
+
+pub fn save_markdown_document(path: String, source: String) -> Result<OpenedDocument, String> {
+    if !is_markdown_document(&path) {
+        return Err("Only .md Markdown Documents can be saved".to_string());
+    }
+
+    fs::write(&path, &source)
+        .map_err(|error| format!("Could not save Markdown Document: {error}"))?;
+    let html = markdown::render_markdown_document(&source, Path::new(&path).parent());
+
+    Ok(OpenedDocument { path, html, source })
 }
 
 fn is_markdown_document(path: &str) -> bool {
@@ -73,6 +86,11 @@ mod commands {
     pub fn open_markdown_document(path: String) -> Result<OpenedDocument, String> {
         super::open_markdown_document(path)
     }
+
+    #[tauri::command]
+    pub fn save_markdown_document(path: String, source: String) -> Result<OpenedDocument, String> {
+        super::save_markdown_document(path, source)
+    }
 }
 
 pub fn run() {
@@ -92,7 +110,8 @@ pub fn run() {
         }))
         .invoke_handler(tauri::generate_handler![
             commands::initial_markdown_paths,
-            commands::open_markdown_document
+            commands::open_markdown_document,
+            commands::save_markdown_document
         ])
         .run(tauri::generate_context!())
         .expect("failed to run mder");

@@ -9,8 +9,26 @@ fn opens_markdown_document_from_path() {
     let document = mder::open_markdown_document(path.to_string_lossy().into_owned()).unwrap();
 
     assert_eq!(document.path, path.to_string_lossy());
+    assert!(document.source.contains("Opened from disk."));
     assert!(document.html.contains("<h1>Hello</h1>"));
     assert!(document.html.contains("Opened from disk."));
+}
+
+#[test]
+fn saves_markdown_document_to_original_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("save.md");
+    fs::write(&path, "# Before").unwrap();
+
+    let document = mder::save_markdown_document(
+        path.to_string_lossy().into_owned(),
+        "# After\n\nSaved.".to_string(),
+    )
+    .unwrap();
+
+    assert_eq!(fs::read_to_string(&path).unwrap(), "# After\n\nSaved.");
+    assert!(document.html.contains("<h1>After</h1>"));
+    assert_eq!(document.source, "# After\n\nSaved.");
 }
 
 #[test]

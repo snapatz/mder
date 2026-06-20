@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const esbuild = require("esbuild");
 
 const root = path.resolve(__dirname, "..");
 const vendor = path.join(root, "web", "vendor");
@@ -20,3 +21,16 @@ fs.cpSync(
   path.join(vendor, "mermaid"),
   { recursive: true }
 );
+
+esbuild.buildSync({
+  bundle: true,
+  format: "esm",
+  stdin: {
+    contents: [
+      'export { basicSetup, EditorView } from "codemirror";',
+      'export { markdown } from "@codemirror/lang-markdown";'
+    ].join("\n"),
+    resolveDir: root
+  },
+  outfile: path.join(vendor, "codemirror.mjs")
+});
