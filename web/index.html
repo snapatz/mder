@@ -19,8 +19,12 @@
         <input id="remote-images" type="checkbox">
         <span>Remote images</span>
       </label>
+      <select id="recent" aria-label="Recent files">
+        <option value="">Recent</option>
+      </select>
       <span id="path"></span>
     </header>
+    <nav id="tabs" class="tabs" aria-label="Open Markdown Documents"></nav>
     <main id="viewer" class="viewer empty">Open a Markdown Document.</main>
     <script src="./vendor/highlight.min.js"></script>
     <script type="module" src="./main.js"></script>
